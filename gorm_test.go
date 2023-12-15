@@ -1,6 +1,7 @@
 package learn_gorm
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"testing"
@@ -419,5 +420,269 @@ func TestUnscoped(t *testing.T) {
 
 	var todos []Todo
 	err = db.Unscoped().Find(&todos).Error
+	assert.Nil(t, err)
+}
+
+func TestLock(t *testing.T) {
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var user User
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Take(&user, "id = ?", "1").Error
+		if err != nil {
+			return err
+		}
+
+		user.Name.FirstName = "Steven"
+		user.Name.LastName = "Simanjuntak"
+		err = tx.Save(&user).Error
+		return err
+	})
+
+	assert.Nil(t, err)
+}
+
+func TestCreateWallet(t *testing.T) {
+	wallet := Wallet{
+		ID:      "1",
+		UserId:  "1",
+		Balance: 1000000,
+	}
+
+	err := db.Create(&wallet).Error
+	assert.Nil(t, err)
+}
+
+func TestRetrieveRelation(t *testing.T) {
+	var user User
+	err := db.Model(&User{}).Preload("Wallet").Take(&user, "id = ?", "1").Error
+	assert.Nil(t, err)
+
+	assert.Equal(t, "1", user.ID)
+	assert.Equal(t, "1", user.Wallet.ID)
+	fmt.Println(json.Marshal(user))
+}
+
+func TestRetrieveRelationJoin(t *testing.T) {
+	var user User
+	err := db.Model(&User{}).Joins("Wallet").Take(&user, "users.id = ?", "1").Error
+	assert.Nil(t, err)
+
+	assert.Equal(t, "1", user.ID)
+	assert.Equal(t, "1", user.Wallet.ID)
+
+	u, err := json.Marshal(user)
+	fmt.Println(string(u))
+}
+
+func TestAutoCreateUpdate(t *testing.T) {
+	user := User{
+		ID:       "20",
+		Password: "password",
+		Name: Name{
+			FirstName: "User 20",
+		},
+		Wallet: Wallet{
+			ID:      "20",
+			UserId:  "20",
+			Balance: 1000000,
+		},
+	}
+
+	err := db.Create(&user).Error
+	assert.Nil(t, err)
+}
+
+func TestSkipAutoCreateUpdate(t *testing.T) {
+	user := User{
+		ID:       "21",
+		Password: "password",
+		Name: Name{
+			FirstName: "User 21",
+		},
+		Wallet: Wallet{
+			ID:      "21",
+			UserId:  "21",
+			Balance: 1000000,
+		},
+	}
+
+	err := db.Omit(clause.Associations).Create(&user).Error
+	assert.Nil(t, err)
+}
+
+func TestUserAndAddresses(t *testing.T) {
+	user := User{
+		ID:       "50",
+		Password: "password",
+		Name: Name{
+			FirstName: "User 50",
+		},
+		Wallet: Wallet{
+			ID:      "50",
+			UserId:  "50",
+			Balance: 1000000,
+		},
+		Addresses: []Address{
+			{
+				UserId:  "50",
+				Address: "Jalan A",
+			},
+			{
+				UserId:  "50",
+				Address: "Jalan B",
+			},
+		},
+	}
+
+	err := db.Create(&user).Error
+	assert.Nil(t, err)
+}
+
+func TestPreloadJoinOneToMany(t *testing.T) {
+	var users []User
+	err := db.Model(&User{}).Preload("Addresses").Joins("Wallet").Find(&users).Error
+	assert.Nil(t, err)
+
+	u, err := json.Marshal(users)
+	assert.Nil(t, err)
+	fmt.Println(string(u))
+}
+
+func TestTakePreloadJoinOneToMany(t *testing.T) {
+	var user User
+	err := db.Model(&User{}).Preload("Addresses").Joins("Wallet").Take(&user, "users.id = ?", "50").Error
+	assert.Nil(t, err)
+
+	u, err := json.Marshal(user)
+	assert.Nil(t, err)
+	fmt.Println(string(u))
+}
+
+func TestBelongsTo(t *testing.T) {
+	fmt.Println("Preload")
+	var addresses []Address
+	err := db.Model(&Address{}).Preload("User").Find(&addresses).Error
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(addresses))
+
+	fmt.Println("Joins")
+	addresses = []Address{}
+	err = db.Model(&Address{}).Joins("User").Find(&addresses).Error
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(addresses))
+}
+
+func TestBelongsToWallet(t *testing.T) {
+	fmt.Println("Preload")
+	var wallets []Wallet
+	err := db.Model(&Wallet{}).Preload("User").Find(&wallets).Error
+	assert.Nil(t, err)
+
+	fmt.Println("Joins")
+	wallets = []Wallet{}
+	err = db.Model(&Wallet{}).Joins("User").Find(&wallets).Error
+	assert.Nil(t, err)
+}
+
+func TestCreateManyToMany(t *testing.T) {
+	product := Product{
+		ID:    "P001",
+		Name:  "Contoh Product",
+		Price: 1000000,
+	}
+
+	err := db.Create(&product).Error
+	assert.Nil(t, err)
+
+	err = db.Table("user_like_product").Create(map[string]interface{}{
+		"user_id":    "1",
+		"product_id": product.ID,
+	}).Error
+	assert.Nil(t, err)
+
+	err = db.Table("user_like_product").Create(map[string]interface{}{
+		"user_id":    "2",
+		"product_id": product.ID,
+	}).Error
+	assert.Nil(t, err)
+}
+
+func TestPreloadManyToMany(t *testing.T) {
+	var product Product
+	err := db.Preload("LikedByUsers").Take(&product, "id = ?", "P001").Error
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(product.LikedByUsers))
+}
+
+func TestPreloadManyToManyUser(t *testing.T) {
+	var user User
+	err := db.Preload("LikeProducts").Take(&user, "id = ?", "1").Error
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(user.LikeProducts))
+}
+
+func TestAssociationFind(t *testing.T) {
+	var product Product
+	err := db.Take(&product, "id = ?", "P001").Error
+	assert.Nil(t, err)
+
+	var users []User
+	err = db.Model(&product).Where("users.first_name LIKE ?", "User%").Association("LikedByUsers").Find(&users)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(users))
+}
+
+func TestAssociationAdd(t *testing.T) {
+	var user User
+	err := db.First(&user, "id = ?", "3").Error
+	assert.Nil(t, err)
+
+	var product Product
+	err = db.First(&product, "id = ?", "P001").Error
+	assert.Nil(t, err)
+
+	err = db.Model(&product).Association("LikedByUsers").Append(&user)
+	assert.Nil(t, err)
+}
+
+func TestAssociationReplace(t *testing.T) {
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var user User
+		err := tx.First(&user, "id = ?", "1").Error
+		assert.Nil(t, err)
+
+		wallet := Wallet{
+			ID:      "01",
+			UserId:  "1",
+			Balance: 1000000,
+		}
+		err = tx.Model(&user).Association("Wallet").Replace(&wallet)
+		return err
+	})
+	assert.Nil(t, err)
+}
+
+func TestAssociationDelete(t *testing.T) {
+	var user User
+	err := db.Take(&user, "id = ?", "3").Error
+	assert.Nil(t, err)
+
+	var product Product
+	err = db.Take(&product, "id = ?", "P001").Error
+	assert.Nil(t, err)
+
+	err = db.Model(&product).Association("LikedByUsers").Delete(&user)
+	assert.Nil(t, err)
+}
+
+func TestAssociationClearq(t *testing.T) {
+	var user User
+	err := db.Take(&user, "id = ?", "3").Error
+	assert.Nil(t, err)
+
+	var product Product
+	err = db.Take(&product, "id = ?", "P001").Error
+	assert.Nil(t, err)
+
+	err = db.Model(&product).Association("LikedByUsers").Clear()
 	assert.Nil(t, err)
 }
